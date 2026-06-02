@@ -7,9 +7,9 @@ const IP_LOOKUP_URL = "https://api.ipify.org?format=json";
 
 const DEFAULT_LUCKY_ITEMS = [
   {
-    name: "リボン",
-    desc: "ほどけそうでほどけない距離感が今日の追い風です。",
-    image: "./assets/ribbon.svg"
+    name: "スカート",
+    desc: "軽やかに揺れる距離感が今日の追い風です。",
+    image: ""
   }
 ];
 
@@ -233,8 +233,10 @@ const storageKeys = {
   favoriteCounts: "mezamashiFavoriteCountsV1",
   traitImages: "mezamashiTraitImagesV1",
   traitVotes: "mezamashiTraitVotesV1",
+  traitVoteUsers: "mezamashiTraitVoteUsersV1",
   visitorId: "mezamashiVisitorIdV1",
   votes: "mezamashiItemVotesV2",
+  itemVoteUsers: "mezamashiItemVoteUsersV1",
   images: "mezamashiItemImagesV2",
   resetVersion: "mezamashiResetVersion"
 };
@@ -406,7 +408,7 @@ function getBaseTraits() {
         displayName: safeName,
         rawName,
         deviation: row.deviation,
-        items: [createItemRecord("リボン", DEFAULT_LUCKY_ITEMS[0].desc)],
+        items: [createItemRecord(DEFAULT_LUCKY_ITEMS[0].name, DEFAULT_LUCKY_ITEMS[0].desc)],
         source: "base"
       };
     })
@@ -434,7 +436,7 @@ function normalizeTraitRecord(record) {
       registrationCount: 2,
       requestIdentities: [],
       deviation: calculateDeviationFromRegistrations(2),
-      items: [createItemRecord("リボン", DEFAULT_LUCKY_ITEMS[0].desc)],
+      items: [createItemRecord(DEFAULT_LUCKY_ITEMS[0].name, DEFAULT_LUCKY_ITEMS[0].desc)],
       source: "custom"
     };
   }
@@ -451,7 +453,7 @@ function normalizeTraitRecord(record) {
     registrationCount,
     requestIdentities: Array.isArray(record.requestIdentities) ? record.requestIdentities : [],
     deviation: itemOnly ? 0 : calculateDeviationFromRegistrations(registrationCount),
-    items: normalizeItemRecords(record.items || [createItemRecord("リボン", DEFAULT_LUCKY_ITEMS[0].desc)]),
+    items: normalizeItemRecords(record.items || [createItemRecord(DEFAULT_LUCKY_ITEMS[0].name, DEFAULT_LUCKY_ITEMS[0].desc)]),
     source: itemOnly ? "itemOnly" : "custom",
     itemOnly
   };
@@ -725,17 +727,20 @@ function renderSpotlight(container, item, title, eyebrow) {
   meta.textContent = deviationText ? `${title} / ${deviationText}` : title;
 
   const votes = getTraitImageVotes(item);
+  const voted = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name));
   const voteRow = document.createElement("div");
   voteRow.className = "spotlight-votes";
 
   const like = document.createElement("button");
   like.type = "button";
   like.textContent = `高評価 ${votes.likes}`;
+  like.disabled = voted;
   like.addEventListener("click", () => voteTraitImage(item, "likes"));
 
   const dislike = document.createElement("button");
   dislike.type = "button";
   dislike.textContent = `低評価 ${votes.dislikes}`;
+  dislike.disabled = voted;
   dislike.addEventListener("click", () => voteTraitImage(item, "dislikes"));
   voteRow.append(like, dislike);
 
@@ -857,16 +862,19 @@ function createTraitImagePanel(item) {
   upload.append(input);
 
   const votes = getTraitImageVotes(item);
+  const voted = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name));
   const like = document.createElement("button");
   like.className = "mini-vote";
   like.type = "button";
   like.textContent = `高評価 ${votes.likes}`;
+  like.disabled = voted;
   like.addEventListener("click", () => voteTraitImage(item, "likes"));
 
   const dislike = document.createElement("button");
   dislike.className = "mini-vote";
   dislike.type = "button";
   dislike.textContent = `低評価 ${votes.dislikes}`;
+  dislike.disabled = voted;
   dislike.addEventListener("click", () => voteTraitImage(item, "dislikes"));
 
   controls.append(upload, like, dislike);
@@ -885,6 +893,11 @@ function getTraitImageVotes(item) {
 
 function voteTraitImage(item, type) {
   const key = traitKey(item.name);
+  if (!recordUserVote(storageKeys.traitVoteUsers, key, type)) {
+    setRankingNotice("評価は一人一回までです。");
+    return;
+  }
+
   const votes = loadJson(storageKeys.traitVotes, {});
   votes[key] ||= { likes: 0, dislikes: 0 };
   votes[key][type] += 1;
@@ -896,6 +909,7 @@ function voteTraitImage(item, type) {
     saveJson(storageKeys.traitImages, images);
     delete votes[key];
     saveJson(storageKeys.traitVotes, votes);
+    deleteVoteUsers(storageKeys.traitVoteUsers, key);
     setRankingNotice(`「${item.displayName || item.name}」の画像は低評価が多くなったので削除しました。`);
   }
 
@@ -1067,6 +1081,13 @@ function voteCurrentItem(type) {
 
   const votes = loadJson(storageKeys.votes, {});
   const key = itemKey(state.currentLuckyItem.name);
+  if (!recordUserVote(storageKeys.itemVoteUsers, key, type)) {
+    els.deleteNotice.textContent = "評価は一人一回までです。";
+    window.setTimeout(() => {
+      els.deleteNotice.textContent = "";
+    }, 4500);
+    return;
+  }
 
   votes[key] ||= { likes: 0, dislikes: 0 };
   votes[key][type] += 1;
@@ -1090,6 +1111,7 @@ function deleteDislikedItem(key) {
   const votes = loadJson(storageKeys.votes, {});
   delete votes[key];
   saveJson(storageKeys.votes, votes);
+  deleteVoteUsers(storageKeys.itemVoteUsers, key);
 
   els.deleteNotice.textContent = "低評価が多くなったので、この画像と関連する追加性癖を削除しました。";
 
@@ -1103,9 +1125,12 @@ function renderVotes() {
 
   const votes = loadJson(storageKeys.votes, {});
   const current = votes[itemKey(state.currentLuckyItem.name)] || { likes: 0, dislikes: 0 };
+  const voted = hasUserVoted(storageKeys.itemVoteUsers, itemKey(state.currentLuckyItem.name));
 
   els.likeCount.textContent = current.likes;
   els.dislikeCount.textContent = current.dislikes;
+  els.likeButton.disabled = voted;
+  els.dislikeButton.disabled = voted;
 }
 
 function pickRelatedItem(item) {
@@ -1115,7 +1140,7 @@ function pickRelatedItem(item) {
 
 function buildTraitComment(item, lucky) {
   const displayName = item.displayName || item.name;
-  const luckyName = lucky?.name || "リボン";
+  const luckyName = lucky?.name || DEFAULT_LUCKY_ITEMS[0].name;
   const luckyDesc = lucky?.desc || DEFAULT_LUCKY_ITEMS[0].desc;
   const group = DETAIL_COMMENT_PATTERNS[(item.rank - 1) % DETAIL_COMMENT_PATTERNS.length];
   const template = group[hash(`${state.dateSeed}:comment:${item.name}:${item.rank}`) % group.length];
@@ -1200,6 +1225,33 @@ function createItemRecord(name, desc, image = "") {
 function calculateDeviationFromRegistrations(count) {
   const safeCount = Math.max(1, Number(count || 1));
   return Math.max(25, Math.min(74, Math.round(43 + Math.log2(safeCount) * 7)));
+}
+
+function getVoteIdentity() {
+  return state.requestIdentity || localStorage.getItem(storageKeys.visitorId) || "unknown";
+}
+
+function hasUserVoted(storageKey, targetKey) {
+  const votes = loadJson(storageKey, {});
+  return Boolean(votes[targetKey]?.[getVoteIdentity()]);
+}
+
+function recordUserVote(storageKey, targetKey, type) {
+  const identity = getVoteIdentity();
+  const votes = loadJson(storageKey, {});
+  votes[targetKey] ||= {};
+
+  if (votes[targetKey][identity]) return false;
+
+  votes[targetKey][identity] = type;
+  saveJson(storageKey, votes);
+  return true;
+}
+
+function deleteVoteUsers(storageKey, targetKey) {
+  const votes = loadJson(storageKey, {});
+  delete votes[targetKey];
+  saveJson(storageKey, votes);
 }
 
 function cleanText(value) {
