@@ -86,19 +86,6 @@ h3 {
   z-index: 2;
 }
 
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 0 0 auto;
-}
-
-.share-button {
-  background: var(--ink);
-  color: white;
-  white-space: nowrap;
-}
-
 .eyebrow {
   color: var(--coral);
   font-size: 12px;
@@ -665,15 +652,6 @@ dialog::backdrop {
   .topbar {
     align-items: start;
     padding: 14px 12px;
-  }
-
-  .topbar-actions {
-    gap: 8px;
-  }
-
-  .share-button {
-    min-height: 42px;
-    padding-inline: 10px;
   }
 
   .topbar h1 {

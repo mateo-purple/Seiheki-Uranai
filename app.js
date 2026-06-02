@@ -243,7 +243,6 @@ const storageKeys = {
 
 const els = {
   onlineDate: document.querySelector("#onlineDate"),
-  shareButton: document.querySelector("#shareButton"),
   allRankingButton: document.querySelector("#allRankingButton"),
   allRankingButtonInline: document.querySelector("#allRankingButtonInline"),
   luckyMedia: document.querySelector("#luckyMedia"),
@@ -349,7 +348,6 @@ function bindEvents() {
 
   els.closeDetail.addEventListener("click", () => els.detailDialog.close());
   els.closeAll.addEventListener("click", () => els.allDialog.close());
-  els.shareButton.addEventListener("click", shareOnX);
   els.allRankingButton.addEventListener("click", showAllRanking);
   els.allRankingButtonInline.addEventListener("click", showAllRanking);
   els.allSearch.addEventListener("input", renderAllRankingList);
@@ -388,7 +386,7 @@ async function getRequestIdentity() {
 }
 
 function render() {
-  state.ranked = rankTraits(getDailyTraits(), state.dateSeed);
+  state.ranked = rankTraits(getAllTraits(), state.dateSeed);
   renderSpotlights();
   renderFavoriteRanks();
   renderList(els.topList, state.ranked.slice(1, 15), { featuredCount: 2 });
@@ -425,10 +423,6 @@ function getCustomTraits() {
 function getAllTraits() {
   const hidden = new Set(loadJson(storageKeys.hiddenTraits, []));
   return mergeTraits([...getBaseTraits(), ...getCustomTraits()]).filter((trait) => !hidden.has(traitKey(trait.name)));
-}
-
-function getDailyTraits() {
-  return mergeTraits(getBaseTraits());
 }
 
 function normalizeTraitRecord(record) {
@@ -949,36 +943,6 @@ function showAllRanking() {
   }
 }
 
-function shareOnX() {
-  const top = state.ranked[0];
-  const bottom = state.ranked[state.ranked.length - 1];
-  const lucky = state.currentLuckyItem;
-  const text = [
-    `目覚まし性癖占い ${state.dateSeed}`,
-    `今日の1位: ${top?.displayName || top?.name || "-"}`,
-    `今日の最下位: ${bottom?.displayName || bottom?.name || "-"}`,
-    `ラッキーアイテム: ${lucky?.name || "-"}`
-  ].join("\n");
-  const params = new URLSearchParams({ text });
-  const pageUrl = getShareablePageUrl();
-
-  if (pageUrl) {
-    params.set("url", pageUrl);
-  }
-
-  const url = `https://twitter.com/intent/tweet?${params.toString()}`;
-  if (typeof window.open === "function") {
-    window.open(url, "_blank", "noopener,noreferrer");
-  } else {
-    window.location.href = url;
-  }
-}
-
-function getShareablePageUrl() {
-  if (!/^https?:$/.test(window.location.protocol)) return "";
-  return window.location.href.split("#")[0];
-}
-
 function renderAllRankingList() {
   els.allRankingList.innerHTML = "";
   const query = cleanText(els.allSearch.value).toLocaleLowerCase("ja-JP");
@@ -1074,7 +1038,7 @@ function rankTraits(traits, seed) {
 function buildLuckyItems() {
   const map = new Map(DEFAULT_LUCKY_ITEMS.map((item) => [itemKey(item.name), { ...item, source: "default" }]));
 
-  for (const trait of getDailyTraits()) {
+  for (const trait of getCustomTraits()) {
     for (const item of normalizeItemRecords(trait.items)) {
       const key = itemKey(item.name);
       if (!map.has(key)) {
