@@ -169,7 +169,7 @@ const DETAIL_COMMENT_PATTERNS = [
 const BLOCKED_WORD_PATTERNS = [
 ];
 
-const REPLACEMENT_WORDS = [];
+const REPLACEMENT_WORDS = [""];
 
 const RAW_SEIHEKI_DEVIATION_TABLE_ALL = [
   { deviation: 74, names: ["ドラゴンカーセックス"] },
