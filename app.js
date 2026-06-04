@@ -448,6 +448,7 @@ async function initOnlineStore() {
     ...DEFAULT_ONLINE_CONFIG,
     ...(window.MEZAMASHI_ONLINE_CONFIG || {})
   };
+  config.supabaseUrl = normalizeSupabaseUrl(config.supabaseUrl);
 
   state.online.config = config;
 
@@ -571,6 +572,10 @@ function normalizeOnlineValue(key, value) {
   }
 
   return cloneJson(value);
+}
+
+function normalizeSupabaseUrl(value) {
+  return cleanText(value).replace(/\/rest\/v1\/?$/i, "").replace(/\/+$/g, "");
 }
 
 function hasStoredValue(value) {

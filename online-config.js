@@ -1,6 +1,6 @@
 window.MEZAMASHI_ONLINE_CONFIG = {
-  enabled: false,
-  supabaseUrl: "https://djnnzolutrxrutbashnj.supabase.co/rest/v1/",
+  enabled: true,
+  supabaseUrl: "https://djnnzolutrxrutbashnj.supabase.co",
   supabaseAnonKey: "sb_publishable_jLp4KIFthShgZO3KwyxpDA_SgCsROSD",
   stateTable: "mezamashi_state",
   storageBucket: "mezamashi-images",
