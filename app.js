@@ -4,6 +4,7 @@ const TRAIT_REQUEST_APPROVE_THRESHOLD = 2;
 const RESET_STORAGE_VERSION = "request-report-v1";
 const HIDDEN_TRAIT_LABEL = "非公開項目";
 const IP_LOOKUP_URL = "https://api.ipify.org?format=json";
+const ONLINE_POLL_INTERVAL_MS = 5000;
 const DEFAULT_ONLINE_CONFIG = {
   enabled: false,
   supabaseUrl: "",
@@ -388,6 +389,8 @@ function bindEvents() {
     const file = els.imageUpload.files?.[0];
     if (!file || !state.currentLuckyItem) return;
 
+    await refreshOnlineBeforeWrite();
+
     const images = loadJson(storageKeys.images, {});
     images[itemKey(state.currentLuckyItem.name)] = await readFile(file);
     saveJson(storageKeys.images, images);
@@ -524,11 +527,25 @@ function startOnlinePolling() {
     reloadOnlineStore().catch((error) => {
       console.warn("Online reload failed:", error);
     });
-  }, 20000);
+  }, ONLINE_POLL_INTERVAL_MS);
+
+  window.addEventListener("focus", () => {
+    reloadOnlineStore().catch((error) => {
+      console.warn("Online focus reload failed:", error);
+    });
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    reloadOnlineStore().catch((error) => {
+      console.warn("Online visibility reload failed:", error);
+    });
+  });
 }
 
-async function reloadOnlineStore() {
+async function reloadOnlineStore(options = {}) {
   if (!state.online.enabled || !state.online.client) return;
+  const { renderAfterReload = true } = options;
 
   const { data, error } = await state.online.client
     .from(state.online.config.stateTable)
@@ -541,7 +558,19 @@ async function reloadOnlineStore() {
     state.online.data[row.storage_key] = normalizeOnlineValue(row.storage_key, row.value);
   }
 
-  refreshAfterOnlineChange();
+  if (renderAfterReload) {
+    refreshAfterOnlineChange();
+  }
+}
+
+async function refreshOnlineBeforeWrite() {
+  if (!state.online.enabled) return;
+
+  try {
+    await reloadOnlineStore({ renderAfterReload: false });
+  } catch (error) {
+    console.warn("Online pre-write reload failed:", error);
+  }
 }
 
 function refreshAfterOnlineChange() {
@@ -659,22 +688,9 @@ function getAllTraits() {
 
 function getDailyTraits() {
   const hidden = new Set(loadJson(storageKeys.hiddenTraits, []));
-  const local = new Map(getCustomTraits().map((trait) => [traitKey(trait.name), trait]));
-  const base = mergeTraits(getBaseTraits()).map((trait) => {
-    const localTrait = local.get(traitKey(trait.name));
-    if (!localTrait) return trait;
-
-    return {
-      ...trait,
-      description: localTrait.description || trait.description,
-      items: normalizeItemRecords([...trait.items, ...localTrait.items]),
-      registered: localTrait.source === "custom",
-      registrationCount: Number(localTrait.registrationCount || 0),
-      requestIdentities: localTrait.requestIdentities || []
-    };
-  });
-  const visible = base.filter((trait) => !hidden.has(traitKey(trait.name)));
-  return visible.length >= 30 ? visible : base;
+  const traits = mergeTraits([...getBaseTraits(), ...getCustomTraits()]);
+  const visible = traits.filter((trait) => !hidden.has(traitKey(trait.name)));
+  return visible.length >= 30 ? visible : traits;
 }
 
 function normalizeTraitRecord(record) {
@@ -766,6 +782,8 @@ async function addTraitFromForm() {
     setNotice("説明にも公開サイト向けに危険な語は使えません。");
     return;
   }
+
+  await refreshOnlineBeforeWrite();
 
   const identity = state.requestIdentity || "unknown";
   const custom = getCustomTraits();
@@ -920,18 +938,18 @@ function renderList(container, items, options = {}) {
     const isFavorite = isFavoriteTrait(item);
     favorite.classList.toggle("is-active", isFavorite);
     favorite.textContent = isFavorite ? "★ お気に入り" : "☆ お気に入り";
-    favorite.addEventListener("click", (event) => {
+    favorite.addEventListener("click", async (event) => {
       event.stopPropagation();
-      toggleFavoriteTrait(item);
+      await toggleFavoriteTrait(item);
     });
 
     const report = document.createElement("button");
     report.className = "report-button";
     report.type = "button";
     report.textContent = "通報";
-    report.addEventListener("click", (event) => {
+    report.addEventListener("click", async (event) => {
       event.stopPropagation();
-      reportTrait(item);
+      await reportTrait(item);
     });
 
     button.append(no, name, deviation, favorite, report);
@@ -1008,13 +1026,19 @@ function renderSpotlight(container, item, title, eyebrow) {
   like.type = "button";
   like.textContent = `高評価 ${votes.likes}`;
   like.disabled = voted;
-  like.addEventListener("click", () => voteTraitImage(item, "likes"));
+  like.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await voteTraitImage(item, "likes");
+  });
 
   const dislike = document.createElement("button");
   dislike.type = "button";
   dislike.textContent = `低評価 ${votes.dislikes}`;
   dislike.disabled = voted;
-  dislike.addEventListener("click", () => voteTraitImage(item, "dislikes"));
+  dislike.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await voteTraitImage(item, "dislikes");
+  });
   voteRow.append(like, dislike);
 
   const actionRow = document.createElement("div");
@@ -1023,12 +1047,14 @@ function renderSpotlight(container, item, title, eyebrow) {
   const upload = document.createElement("label");
   upload.className = "spotlight-upload";
   upload.textContent = "画像を追加";
+  upload.addEventListener("click", (event) => event.stopPropagation());
   const input = document.createElement("input");
   input.type = "file";
   input.accept = "image/*";
   input.addEventListener("change", async () => {
     const file = input.files?.[0];
     if (!file) return;
+    await refreshOnlineBeforeWrite();
     const images = loadJson(storageKeys.traitImages, {});
     images[traitKey(item.name)] = await readFile(file);
     saveJson(storageKeys.traitImages, images);
@@ -1042,13 +1068,19 @@ function renderSpotlight(container, item, title, eyebrow) {
   const active = isFavoriteTrait(item);
   favorite.classList.toggle("is-active", active);
   favorite.textContent = active ? "★ お気に入り" : "☆ お気に入り";
-  favorite.addEventListener("click", () => toggleFavoriteTrait(item));
+  favorite.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await toggleFavoriteTrait(item);
+  });
 
   const report = document.createElement("button");
   report.type = "button";
   report.className = "report-button";
   report.textContent = "通報";
-  report.addEventListener("click", () => reportTrait(item));
+  report.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await reportTrait(item);
+  });
 
   actionRow.append(upload, favorite, report);
   copy.append(label, heading, meta, voteRow, actionRow);
@@ -1069,32 +1101,68 @@ function isFavoriteTrait(item) {
   return loadJson(storageKeys.favorites, []).includes(traitKey(item.name));
 }
 
-function toggleFavoriteTrait(item) {
+async function toggleFavoriteTrait(item) {
+  await refreshOnlineBeforeWrite();
+
   const key = traitKey(item.name);
   const favorites = new Set(loadJson(storageKeys.favorites, []));
-  const counts = loadJson(storageKeys.favoriteCounts, {});
 
   if (favorites.has(key)) {
     favorites.delete(key);
-    counts[key] = Math.max(0, Number(counts[key] || 1) - 1);
     setRankingNotice(`「${item.displayName || item.name}」をお気に入りから外しました。`);
   } else {
     favorites.add(key);
-    counts[key] = Number(counts[key] || 0) + 1;
     setRankingNotice(`「${item.displayName || item.name}」をお気に入り登録しました。`);
   }
 
   saveJson(storageKeys.favorites, [...favorites]);
+  const counts = calculateFavoriteCounts();
   saveJson(storageKeys.favoriteCounts, counts);
   render();
 }
 
 function getFavoriteCount(item) {
+  if (state.online.enabled) {
+    return Number(calculateFavoriteCounts()[traitKey(item.name)] || 0);
+  }
+
   return Number(loadJson(storageKeys.favoriteCounts, {})[traitKey(item.name)] || 0);
 }
 
 function getFavoriteDeviation(item) {
   return calculateDeviationFromRegistrations(getFavoriteCount(item) || 1);
+}
+
+function calculateFavoriteCounts() {
+  const counts = {};
+
+  for (const list of Object.values(getFavoriteGroups())) {
+    if (!Array.isArray(list)) continue;
+
+    for (const name of list) {
+      const key = traitKey(name);
+      if (!key) continue;
+      counts[key] = Number(counts[key] || 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+function getFavoriteGroups() {
+  if (state.online.enabled) {
+    const onlineFavorites = state.online.data[storageKeys.favorites];
+
+    if (Array.isArray(onlineFavorites)) {
+      return { [getVoteIdentity()]: onlineFavorites };
+    }
+
+    if (onlineFavorites && typeof onlineFavorites === "object") {
+      return cloneJson(onlineFavorites);
+    }
+  }
+
+  return { [getVoteIdentity()]: loadLocalJson(storageKeys.favorites, []) };
 }
 
 function createTraitImagePanel(item) {
@@ -1121,12 +1189,14 @@ function createTraitImagePanel(item) {
   const upload = document.createElement("label");
   upload.className = "mini-upload";
   upload.textContent = "画像追加";
+  upload.addEventListener("click", (event) => event.stopPropagation());
   const input = document.createElement("input");
   input.type = "file";
   input.accept = "image/*";
   input.addEventListener("change", async () => {
     const file = input.files?.[0];
     if (!file) return;
+    await refreshOnlineBeforeWrite();
     const images = loadJson(storageKeys.traitImages, {});
     images[traitKey(item.name)] = await readFile(file);
     saveJson(storageKeys.traitImages, images);
@@ -1141,14 +1211,14 @@ function createTraitImagePanel(item) {
   like.type = "button";
   like.textContent = `高評価 ${votes.likes}`;
   like.disabled = voted;
-  like.addEventListener("click", () => voteTraitImage(item, "likes"));
+  like.addEventListener("click", async () => voteTraitImage(item, "likes"));
 
   const dislike = document.createElement("button");
   dislike.className = "mini-vote";
   dislike.type = "button";
   dislike.textContent = `低評価 ${votes.dislikes}`;
   dislike.disabled = voted;
-  dislike.addEventListener("click", () => voteTraitImage(item, "dislikes"));
+  dislike.addEventListener("click", async () => voteTraitImage(item, "dislikes"));
 
   controls.append(upload, like, dislike);
   panel.append(imageBox, controls);
@@ -1164,7 +1234,9 @@ function getTraitImageVotes(item) {
   return votes[traitKey(item.name)] || { likes: 0, dislikes: 0 };
 }
 
-function voteTraitImage(item, type) {
+async function voteTraitImage(item, type) {
+  await refreshOnlineBeforeWrite();
+
   const key = traitKey(item.name);
   if (!recordUserVote(storageKeys.traitVoteUsers, key, type)) {
     setRankingNotice("評価は一人一回までです。");
@@ -1243,9 +1315,11 @@ function getTraitRatingVotes(item) {
   return votes[traitKey(item.name)] || { likes: 0, dislikes: 0 };
 }
 
-function voteCurrentTrait(type) {
+async function voteCurrentTrait(type) {
   const item = state.currentDetailItem;
   if (!item) return;
+
+  await refreshOnlineBeforeWrite();
 
   const key = traitKey(item.name);
   if (!recordUserVote(storageKeys.traitRatingVoteUsers, key, type)) {
@@ -1308,9 +1382,9 @@ function renderAllRankingList() {
     const isFavorite = isFavoriteTrait(item);
     favorite.classList.toggle("is-active", isFavorite);
     favorite.textContent = isFavorite ? "★" : "☆";
-    favorite.addEventListener("click", (event) => {
+    favorite.addEventListener("click", async (event) => {
       event.stopPropagation();
-      toggleFavoriteTrait(item);
+      await toggleFavoriteTrait(item);
       renderAllRankingList();
     });
 
@@ -1318,9 +1392,9 @@ function renderAllRankingList() {
     report.className = "report-button";
     report.type = "button";
     report.textContent = "通報";
-    report.addEventListener("click", (event) => {
+    report.addEventListener("click", async (event) => {
       event.stopPropagation();
-      reportTrait(item);
+      await reportTrait(item);
       renderAllRankingList();
     });
 
@@ -1330,7 +1404,9 @@ function renderAllRankingList() {
   }
 }
 
-function reportTrait(item) {
+async function reportTrait(item) {
+  await refreshOnlineBeforeWrite();
+
   const reports = loadJson(storageKeys.traitReports, {});
   const key = traitKey(item.name);
 
@@ -1351,8 +1427,10 @@ function reportTrait(item) {
   render();
 }
 
-function reportTraitImage(item) {
+async function reportTraitImage(item) {
   const key = traitKey(item.name);
+  await refreshOnlineBeforeWrite();
+
   if (!getTraitImage(item)) {
     setRankingNotice("通報できる画像がありません。");
     return;
@@ -1480,8 +1558,10 @@ function renderLuckyItem() {
   renderVotes();
 }
 
-function voteCurrentItem(type) {
+async function voteCurrentItem(type) {
   if (!state.currentLuckyItem) return;
+
+  await refreshOnlineBeforeWrite();
 
   const votes = loadJson(storageKeys.votes, {});
   const key = itemKey(state.currentLuckyItem.name);
