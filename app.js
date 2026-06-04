@@ -4,6 +4,14 @@ const TRAIT_REQUEST_APPROVE_THRESHOLD = 2;
 const RESET_STORAGE_VERSION = "request-report-v1";
 const HIDDEN_TRAIT_LABEL = "非公開項目";
 const IP_LOOKUP_URL = "https://api.ipify.org?format=json";
+const DEFAULT_ONLINE_CONFIG = {
+  enabled: false,
+  supabaseUrl: "",
+  supabaseAnonKey: "",
+  stateTable: "mezamashi_state",
+  storageBucket: "mezamashi-images",
+  realtime: true
+};
 
 const DEFAULT_LUCKY_ITEMS = [
   {
@@ -244,6 +252,24 @@ const storageKeys = {
   resetVersion: "mezamashiResetVersion"
 };
 
+const ONLINE_SYNC_KEYS = Object.freeze([
+  storageKeys.traits,
+  storageKeys.pendingTraits,
+  storageKeys.traitReports,
+  storageKeys.hiddenTraits,
+  storageKeys.favorites,
+  storageKeys.favoriteCounts,
+  storageKeys.traitRatingVotes,
+  storageKeys.traitRatingVoteUsers,
+  storageKeys.traitImages,
+  storageKeys.traitVotes,
+  storageKeys.traitVoteUsers,
+  storageKeys.traitImageReports,
+  storageKeys.votes,
+  storageKeys.itemVoteUsers,
+  storageKeys.images
+]);
+
 const els = {
   onlineDate: document.querySelector("#onlineDate"),
   allRankingButton: document.querySelector("#allRankingButton"),
@@ -313,7 +339,16 @@ const state = {
   ranked: [],
   currentLuckyItem: null,
   currentDetailItem: null,
-  requestIdentity: ""
+  requestIdentity: "",
+  online: {
+    enabled: false,
+    client: null,
+    config: { ...DEFAULT_ONLINE_CONFIG },
+    data: {},
+    saveTimers: new Map(),
+    renderTimer: 0,
+    pollTimer: 0
+  }
 };
 
 init();
@@ -322,6 +357,7 @@ async function init() {
   resetOldLocalStorageOnce();
   const today = await getOnlineDate().catch(() => "オンライン日付を取得できません");
   state.requestIdentity = await getRequestIdentity();
+  await initOnlineStore();
   state.dateSeed = today;
   els.onlineDate.textContent = today;
   bindEvents();
@@ -405,6 +441,174 @@ async function getRequestIdentity() {
     localStorage.setItem(storageKeys.visitorId, visitorId);
   }
   return visitorId;
+}
+
+async function initOnlineStore() {
+  const config = {
+    ...DEFAULT_ONLINE_CONFIG,
+    ...(window.MEZAMASHI_ONLINE_CONFIG || {})
+  };
+
+  state.online.config = config;
+
+  if (!config.enabled || !config.supabaseUrl || !config.supabaseAnonKey) return;
+  if (!window.supabase?.createClient) return;
+
+  const client = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  state.online.client = client;
+
+  try {
+    const { data, error } = await client
+      .from(config.stateTable)
+      .select("storage_key,value")
+      .in("storage_key", ONLINE_SYNC_KEYS);
+
+    if (error) throw error;
+
+    state.online.data = {};
+
+    for (const row of data || []) {
+      state.online.data[row.storage_key] = normalizeOnlineValue(row.storage_key, row.value);
+    }
+
+    for (const key of ONLINE_SYNC_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(state.online.data, key)) continue;
+      const localValue = loadLocalJson(key, null);
+      if (hasStoredValue(localValue)) {
+        state.online.data[key] = normalizeOnlineValue(key, localValue);
+        queueOnlineSave(key, state.online.data[key]);
+      }
+    }
+
+    state.online.enabled = true;
+    subscribeOnlineStore();
+    startOnlinePolling();
+  } catch (error) {
+    console.warn("Online sync is disabled:", error);
+    state.online.enabled = false;
+  }
+}
+
+function subscribeOnlineStore() {
+  if (!state.online.config.realtime || !state.online.client?.channel) return;
+
+  state.online.client
+    .channel("mezamashi-online-state")
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: state.online.config.stateTable
+      },
+      (payload) => {
+        const key = payload.new?.storage_key || payload.old?.storage_key;
+        if (!ONLINE_SYNC_KEYS.includes(key)) return;
+
+        if (payload.eventType === "DELETE") {
+          delete state.online.data[key];
+        } else {
+          state.online.data[key] = normalizeOnlineValue(key, payload.new.value);
+        }
+
+        refreshAfterOnlineChange();
+      }
+    )
+    .subscribe();
+}
+
+function startOnlinePolling() {
+  window.clearInterval(state.online.pollTimer);
+  state.online.pollTimer = window.setInterval(() => {
+    reloadOnlineStore().catch((error) => {
+      console.warn("Online reload failed:", error);
+    });
+  }, 20000);
+}
+
+async function reloadOnlineStore() {
+  if (!state.online.enabled || !state.online.client) return;
+
+  const { data, error } = await state.online.client
+    .from(state.online.config.stateTable)
+    .select("storage_key,value")
+    .in("storage_key", ONLINE_SYNC_KEYS);
+
+  if (error) throw error;
+
+  for (const row of data || []) {
+    state.online.data[row.storage_key] = normalizeOnlineValue(row.storage_key, row.value);
+  }
+
+  refreshAfterOnlineChange();
+}
+
+function refreshAfterOnlineChange() {
+  window.clearTimeout(state.online.renderTimer);
+  state.online.renderTimer = window.setTimeout(() => {
+    const currentDetailKey = state.currentDetailItem ? traitKey(state.currentDetailItem.name) : "";
+
+    render();
+
+    if (els.allDialog.open) {
+      renderAllRankingList();
+    }
+
+    if (els.detailDialog.open && currentDetailKey) {
+      const refreshed = state.ranked.find((item) => traitKey(item.name) === currentDetailKey);
+      if (refreshed) {
+        showDetail(refreshed);
+      } else {
+        els.detailDialog.close();
+      }
+    }
+  }, 120);
+}
+
+function normalizeOnlineValue(key, value) {
+  if (key === storageKeys.favorites && Array.isArray(value)) {
+    return { [getVoteIdentity()]: value };
+  }
+
+  return cloneJson(value);
+}
+
+function hasStoredValue(value) {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function queueOnlineSave(key, value) {
+  if (!state.online.client || !ONLINE_SYNC_KEYS.includes(key)) return;
+
+  window.clearTimeout(state.online.saveTimers.get(key));
+  state.online.saveTimers.set(
+    key,
+    window.setTimeout(() => {
+      saveOnlineValue(key, cloneJson(value));
+    }, 180)
+  );
+}
+
+async function saveOnlineValue(key, value) {
+  if (!state.online.client) return;
+
+  const { error } = await state.online.client
+    .from(state.online.config.stateTable)
+    .upsert(
+      {
+        storage_key: key,
+        value,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "storage_key" }
+    );
+
+  if (error) {
+    console.warn("Online save failed:", error);
+  }
 }
 
 function render() {
@@ -1009,7 +1213,9 @@ function showDetail(item) {
   }
 
   renderDetailVotes(item);
-  els.detailDialog.showModal();
+  if (!els.detailDialog.open) {
+    els.detailDialog.showModal();
+  }
 }
 
 function getTraitDescription(item) {
@@ -1492,6 +1698,22 @@ function traitKey(value) {
 }
 
 function loadJson(key, fallback) {
+  if (state.online.enabled && ONLINE_SYNC_KEYS.includes(key)) {
+    if (key === storageKeys.favorites) {
+      const allFavorites = state.online.data[key] || {};
+      const value = Array.isArray(allFavorites) ? allFavorites : allFavorites[getVoteIdentity()];
+      return cloneJson(value ?? fallback);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(state.online.data, key)) {
+      return cloneJson(state.online.data[key] ?? fallback);
+    }
+  }
+
+  return loadLocalJson(key, fallback);
+}
+
+function loadLocalJson(key, fallback) {
   try {
     return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
   } catch {
@@ -1501,9 +1723,35 @@ function loadJson(key, fallback) {
 
 function saveJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
+
+  if (!state.online.enabled || !ONLINE_SYNC_KEYS.includes(key)) return;
+
+  let onlineValue = value;
+
+  if (key === storageKeys.favorites) {
+    const allFavorites = state.online.data[key] && !Array.isArray(state.online.data[key])
+      ? cloneJson(state.online.data[key])
+      : {};
+    allFavorites[getVoteIdentity()] = cloneJson(value);
+    onlineValue = allFavorites;
+  }
+
+  state.online.data[key] = cloneJson(onlineValue);
+  queueOnlineSave(key, onlineValue);
 }
 
-function readFile(file) {
+async function readFile(file) {
+  const onlineUrl = await uploadOnlineImage(file).catch((error) => {
+    console.warn("Online image upload failed:", error);
+    return "";
+  });
+
+  if (onlineUrl) return onlineUrl;
+
+  return readLocalFile(file);
+}
+
+function readLocalFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
@@ -1511,6 +1759,48 @@ function readFile(file) {
     reader.addEventListener("error", reject);
     reader.readAsDataURL(file);
   });
+}
+
+async function uploadOnlineImage(file) {
+  if (!state.online.enabled || !state.online.client || !state.online.config.storageBucket) return "";
+
+  const extension = getFileExtension(file.name, file.type);
+  const path = [
+    "uploads",
+    new Date().toISOString().slice(0, 10),
+    `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`
+  ].join("/");
+
+  const { error } = await state.online.client.storage
+    .from(state.online.config.storageBucket)
+    .upload(path, file, {
+      cacheControl: "31536000",
+      contentType: file.type || "application/octet-stream",
+      upsert: false
+    });
+
+  if (error) throw error;
+
+  const { data } = state.online.client.storage
+    .from(state.online.config.storageBucket)
+    .getPublicUrl(path);
+
+  return data?.publicUrl || "";
+}
+
+function getFileExtension(name, type) {
+  const fromName = cleanText(name).split(".").pop()?.toLowerCase();
+  if (fromName && /^[a-z0-9]{2,5}$/.test(fromName)) return fromName;
+
+  if (type === "image/png") return "png";
+  if (type === "image/webp") return "webp";
+  if (type === "image/gif") return "gif";
+  return "jpg";
+}
+
+function cloneJson(value) {
+  if (value === undefined) return value;
+  return JSON.parse(JSON.stringify(value));
 }
 
 function hash(input) {
