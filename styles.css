@@ -282,7 +282,9 @@ main {
 }
 
 .favorite-ranks .compact-rank-list {
-  grid-template-columns: 1fr;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .rank-item {
