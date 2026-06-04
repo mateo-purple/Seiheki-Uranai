@@ -112,7 +112,6 @@ main {
 }
 
 .date-panel,
-.ad-banner,
 .rankings,
 .controls,
 .rank-column,
@@ -136,28 +135,6 @@ main {
   margin-top: 8px;
   font-size: clamp(32px, 6vw, 72px);
   line-height: 0.9;
-}
-
-.ad-banner {
-  min-height: 72px;
-  margin-top: 18px;
-  display: grid;
-  place-items: center;
-  gap: 4px;
-  color: var(--muted);
-  border-style: dashed;
-  text-align: center;
-}
-
-.ad-banner span {
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.ad-banner strong {
-  font-size: 16px;
 }
 
 .date-panel span,
@@ -484,13 +461,20 @@ label {
 }
 
 input[type="text"],
-input[type="search"] {
+input[type="search"],
+textarea {
   min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
   padding: 0 14px;
   width: 100%;
+}
+
+textarea {
+  min-height: 82px;
+  padding-block: 12px;
+  resize: vertical;
 }
 
 input[type="file"] {
@@ -591,6 +575,58 @@ dialog::backdrop {
   background: rgba(23, 23, 24, 0.38);
 }
 
+.detail-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) 1fr;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.detail-media {
+  min-height: 260px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f4efe8;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.detail-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: none;
+}
+
+.detail-media.has-image img {
+  display: block;
+}
+
+.detail-media.has-image p {
+  display: none;
+}
+
+.detail-copy {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 14px;
+}
+
+.detail-copy h2 {
+  overflow-wrap: anywhere;
+}
+
+.detail-votes,
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .close-button {
   position: absolute;
   right: 12px;
@@ -689,7 +725,6 @@ dialog::backdrop {
   }
 
   .date-panel,
-  .ad-banner,
   .rankings,
   .controls {
     padding: 14px;
@@ -714,7 +749,9 @@ dialog::backdrop {
 
   .spotlight-actions,
   .spotlight-votes,
-  .rating-row {
+  .rating-row,
+  .detail-votes,
+  .detail-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
@@ -813,6 +850,15 @@ dialog::backdrop {
     width: calc(100% - 20px);
     max-height: calc(100vh - 20px);
     padding: 18px;
+  }
+
+  .detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-media {
+    min-height: 0;
+    aspect-ratio: 16 / 10;
   }
 
   .full-rank-list li {

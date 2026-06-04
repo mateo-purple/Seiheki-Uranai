@@ -231,9 +231,12 @@ const storageKeys = {
   hiddenTraits: "mezamashiHiddenTraitsV1",
   favorites: "mezamashiFavoritesV1",
   favoriteCounts: "mezamashiFavoriteCountsV1",
+  traitRatingVotes: "mezamashiTraitRatingVotesV1",
+  traitRatingVoteUsers: "mezamashiTraitRatingVoteUsersV1",
   traitImages: "mezamashiTraitImagesV1",
   traitVotes: "mezamashiTraitVotesV1",
   traitVoteUsers: "mezamashiTraitVoteUsersV1",
+  traitImageReports: "mezamashiTraitImageReportsV1",
   visitorId: "mezamashiVisitorIdV1",
   votes: "mezamashiItemVotesV2",
   itemVoteUsers: "mezamashiItemVoteUsersV1",
@@ -256,6 +259,7 @@ const els = {
   imageUpload: document.querySelector("#imageUpload"),
   addForm: document.querySelector("#addForm"),
   traitInput: document.querySelector("#traitInput"),
+  traitDescriptionInput: document.querySelector("#traitDescriptionInput"),
   itemInputs: [
     document.querySelector("#itemInput1"),
     document.querySelector("#itemInput2"),
@@ -285,6 +289,15 @@ const els = {
   detailRank: document.querySelector("#detailRank"),
   detailName: document.querySelector("#detailName"),
   detailText: document.querySelector("#detailText"),
+  detailMedia: document.querySelector("#detailMedia"),
+  detailImage: document.querySelector("#detailImage"),
+  detailNoImage: document.querySelector("#detailNoImage"),
+  detailLikeButton: document.querySelector("#detailLikeButton"),
+  detailDislikeButton: document.querySelector("#detailDislikeButton"),
+  detailLikeCount: document.querySelector("#detailLikeCount"),
+  detailDislikeCount: document.querySelector("#detailDislikeCount"),
+  detailTraitReportButton: document.querySelector("#detailTraitReportButton"),
+  detailImageReportButton: document.querySelector("#detailImageReportButton"),
   detailItems: document.querySelector("#detailItems"),
   allDialog: document.querySelector("#allDialog"),
   closeAll: document.querySelector("#closeAll"),
@@ -299,6 +312,7 @@ const state = {
   dateSeed: "",
   ranked: [],
   currentLuckyItem: null,
+  currentDetailItem: null,
   requestIdentity: ""
 };
 
@@ -347,6 +361,14 @@ function bindEvents() {
   });
 
   els.closeDetail.addEventListener("click", () => els.detailDialog.close());
+  els.detailLikeButton.addEventListener("click", () => voteCurrentTrait("likes"));
+  els.detailDislikeButton.addEventListener("click", () => voteCurrentTrait("dislikes"));
+  els.detailTraitReportButton.addEventListener("click", () => {
+    if (state.currentDetailItem) reportTrait(state.currentDetailItem);
+  });
+  els.detailImageReportButton.addEventListener("click", () => {
+    if (state.currentDetailItem) reportTraitImage(state.currentDetailItem);
+  });
   els.closeAll.addEventListener("click", () => els.allDialog.close());
   els.allRankingButton.addEventListener("click", showAllRanking);
   els.allRankingButtonInline.addEventListener("click", showAllRanking);
@@ -407,6 +429,7 @@ function getBaseTraits() {
         name: uniqueName,
         displayName: safeName,
         rawName,
+        description: buildDefaultTraitDescription(safeName),
         deviation: row.deviation,
         items: [createItemRecord(DEFAULT_LUCKY_ITEMS[0].name, DEFAULT_LUCKY_ITEMS[0].desc)],
         source: "base"
@@ -426,7 +449,23 @@ function getAllTraits() {
 }
 
 function getDailyTraits() {
-  return mergeTraits(getBaseTraits());
+  const hidden = new Set(loadJson(storageKeys.hiddenTraits, []));
+  const local = new Map(getCustomTraits().map((trait) => [traitKey(trait.name), trait]));
+  const base = mergeTraits(getBaseTraits()).map((trait) => {
+    const localTrait = local.get(traitKey(trait.name));
+    if (!localTrait) return trait;
+
+    return {
+      ...trait,
+      description: localTrait.description || trait.description,
+      items: normalizeItemRecords([...trait.items, ...localTrait.items]),
+      registered: localTrait.source === "custom",
+      registrationCount: Number(localTrait.registrationCount || 0),
+      requestIdentities: localTrait.requestIdentities || []
+    };
+  });
+  const visible = base.filter((trait) => !hidden.has(traitKey(trait.name)));
+  return visible.length >= 30 ? visible : base;
 }
 
 function normalizeTraitRecord(record) {
@@ -437,6 +476,7 @@ function normalizeTraitRecord(record) {
     return {
       name: safeName,
       displayName: safeName,
+      description: buildDefaultTraitDescription(safeName),
       registrationCount: 2,
       requestIdentities: [],
       deviation: calculateDeviationFromRegistrations(2),
@@ -454,6 +494,7 @@ function normalizeTraitRecord(record) {
   return {
     name: safeName,
     displayName: safeName,
+    description: cleanText(record.description) || buildDefaultTraitDescription(safeName),
     registrationCount,
     requestIdentities: Array.isArray(record.requestIdentities) ? record.requestIdentities : [],
     deviation: itemOnly ? 0 : calculateDeviationFromRegistrations(registrationCount),
@@ -486,6 +527,7 @@ function mergeTraits(traits) {
     current.requestIdentities = [...new Set([...(current.requestIdentities || []), ...(trait.requestIdentities || [])])];
     current.deviation = isCustom ? trait.deviation : current.registered ? current.deviation : Math.max(current.deviation, trait.deviation);
     current.displayName = current.displayName || trait.displayName || trait.name;
+    current.description = trait.description || current.description || buildDefaultTraitDescription(current.displayName || current.name);
   }
 
   return [...map.values()];
@@ -494,15 +536,15 @@ function mergeTraits(traits) {
 async function addTraitFromForm() {
   const rawName = cleanText(els.traitInput.value);
   const safeName = sanitizeTraitName(rawName);
-  const requestedItems = await collectRequestedItems();
+  const description = cleanText(els.traitDescriptionInput.value);
 
   if (!rawName) {
     setNotice("性癖名を入れてください。");
     return;
   }
 
-  if (requestedItems.error) {
-    setNotice(requestedItems.error);
+  if (!description) {
+    setNotice("性癖の説明を入れてください。");
     return;
   }
 
@@ -511,8 +553,8 @@ async function addTraitFromForm() {
     return;
   }
 
-  if ([...requestedItems.items.map((item) => item.name), ...requestedItems.items.map((item) => item.desc)].some(containsBlockedWord)) {
-    setNotice("関連アイテムにも公開サイト向けに危険な語は使えません。");
+  if (containsBlockedWord(description)) {
+    setNotice("説明にも公開サイト向けに危険な語は使えません。");
     return;
   }
 
@@ -520,11 +562,23 @@ async function addTraitFromForm() {
   const custom = getCustomTraits();
   const existingCustom = custom.find((trait) => traitKey(trait.name) === traitKey(safeName));
   const key = traitKey(safeName);
+  const isExistingTrait = getAllTraits().some((trait) => traitKey(trait.name) === key);
+  const requestedItems = await collectRequestedItems(!isExistingTrait);
 
-  if (getAllTraits().some((trait) => traitKey(trait.name) === key)) {
-    addRelatedItemsToExistingTrait(custom, existingCustom, safeName, requestedItems.items);
+  if (requestedItems.error) {
+    setNotice(requestedItems.error);
+    return;
+  }
+
+  if ([...requestedItems.items.map((item) => item.name), ...requestedItems.items.map((item) => item.desc)].some(containsBlockedWord)) {
+    setNotice("関連アイテムにも公開サイト向けに危険な語は使えません。");
+    return;
+  }
+
+  if (isExistingTrait) {
+    addRelatedItemsToExistingTrait(custom, existingCustom, safeName, requestedItems.items, description);
     els.addForm.reset();
-    setNotice(`「${safeName}」に関連アイテムを追加しました。`);
+    setNotice(`「${safeName}」に説明を追加しました。`);
     render();
     return;
   }
@@ -543,6 +597,7 @@ async function addTraitFromForm() {
     registrationCount: 0,
     requestCount: 0,
     requestIdentities: [],
+    description,
     items: []
   };
 
@@ -555,6 +610,7 @@ async function addTraitFromForm() {
   pending[key].registrationCount = pending[key].requestCount;
   pending[key].requestIdentities = [...new Set([...(pending[key].requestIdentities || []), identity])];
   pending[key].deviation = calculateDeviationFromRegistrations(pending[key].registrationCount);
+  pending[key].description = description || pending[key].description;
   pending[key].items = normalizeItemRecords([...pending[key].items, ...requestedItems.items]);
 
   if (pending[key].requestCount < TRAIT_REQUEST_APPROVE_THRESHOLD) {
@@ -573,13 +629,15 @@ async function addTraitFromForm() {
   render();
 }
 
-function addRelatedItemsToExistingTrait(custom, existingCustom, safeName, items) {
+function addRelatedItemsToExistingTrait(custom, existingCustom, safeName, items, description) {
   if (existingCustom) {
+    existingCustom.description = description || existingCustom.description || buildDefaultTraitDescription(safeName);
     existingCustom.items = normalizeItemRecords([...existingCustom.items, ...items]);
   } else {
     custom.push({
       name: safeName,
       displayName: safeName,
+      description: description || buildDefaultTraitDescription(safeName),
       registrationCount: 0,
       requestIdentities: [],
       deviation: 0,
@@ -602,6 +660,7 @@ function approvePendingTrait(record) {
     existing.registrationCount = Math.max(Number(existing.registrationCount || 0), registrationCount);
     existing.requestIdentities = [...new Set([...(existing.requestIdentities || []), ...requestIdentities])];
     existing.deviation = calculateDeviationFromRegistrations(existing.registrationCount);
+    existing.description = record.description || existing.description || buildDefaultTraitDescription(existing.displayName || existing.name);
     existing.items = normalizeItemRecords([...existing.items, ...record.items]);
   } else {
     custom.push({
@@ -610,6 +669,7 @@ function approvePendingTrait(record) {
       registrationCount,
       requestIdentities,
       deviation: calculateDeviationFromRegistrations(registrationCount),
+      description: record.description || buildDefaultTraitDescription(record.displayName || record.name),
       items: normalizeItemRecords(record.items),
       source: "custom"
     });
@@ -907,27 +967,39 @@ function voteTraitImage(item, type) {
   votes[key][type] += 1;
   saveJson(storageKeys.traitVotes, votes);
 
-  if (type === "dislikes" && votes[key].dislikes >= DISLIKE_DELETE_THRESHOLD) {
-    const images = loadJson(storageKeys.traitImages, {});
-    delete images[key];
-    saveJson(storageKeys.traitImages, images);
-    delete votes[key];
-    saveJson(storageKeys.traitVotes, votes);
-    deleteVoteUsers(storageKeys.traitVoteUsers, key);
-    setRankingNotice(`「${item.displayName || item.name}」の画像は低評価が多くなったので削除しました。`);
+  if (type === "dislikes" && shouldRemoveTraitImage(item)) {
+    deleteTraitImage(item, key);
+    if (state.currentDetailItem && traitKey(state.currentDetailItem.name) === key) {
+      els.detailMedia.classList.remove("has-image");
+      els.detailImage.removeAttribute("src");
+      els.detailImageReportButton.disabled = true;
+    }
+    setRankingNotice(`「${item.displayName || item.name}」の画像は低評価割合が高いため削除しました。`);
+  } else if (type === "dislikes" && votes[key].dislikes >= DISLIKE_DELETE_THRESHOLD) {
+    setRankingNotice("高評価やお気に入り数も見て、まだ削除しない判定です。");
   }
 
   render();
 }
 
 function showDetail(item) {
-  const lucky = pickRelatedItem(item);
+  state.currentDetailItem = item;
+  const imageSrc = getTraitImage(item);
 
   els.detailRank.textContent = item.registered
     ? `Rank ${item.rank} / 偏差値 ${item.deviation} / 登録 ${item.registrationCount || 0}`
     : `Rank ${item.rank}`;
   els.detailName.textContent = item.displayName || item.name;
-  els.detailText.textContent = buildTraitComment(item, lucky);
+  els.detailText.textContent = getTraitDescription(item);
+  els.detailMedia.classList.toggle("has-image", Boolean(imageSrc));
+  els.detailImage.removeAttribute("src");
+  els.detailImage.alt = `${item.displayName || item.name}の画像`;
+
+  if (imageSrc) {
+    els.detailImage.src = imageSrc;
+  }
+
+  els.detailImageReportButton.disabled = !imageSrc;
   els.detailItems.innerHTML = "";
 
   for (const related of normalizeItemRecords(item.items)) {
@@ -936,7 +1008,58 @@ function showDetail(item) {
     els.detailItems.append(tag);
   }
 
+  renderDetailVotes(item);
   els.detailDialog.showModal();
+}
+
+function getTraitDescription(item) {
+  return cleanText(item.description) || buildDefaultTraitDescription(item.displayName || item.name);
+}
+
+function renderDetailVotes(item) {
+  const key = traitKey(item.name);
+  const votes = getTraitRatingVotes(item);
+  const voted = hasUserVoted(storageKeys.traitRatingVoteUsers, key);
+
+  els.detailLikeCount.textContent = votes.likes;
+  els.detailDislikeCount.textContent = votes.dislikes;
+  els.detailLikeButton.disabled = voted;
+  els.detailDislikeButton.disabled = voted;
+}
+
+function getTraitRatingVotes(item) {
+  const votes = loadJson(storageKeys.traitRatingVotes, {});
+  return votes[traitKey(item.name)] || { likes: 0, dislikes: 0 };
+}
+
+function voteCurrentTrait(type) {
+  const item = state.currentDetailItem;
+  if (!item) return;
+
+  const key = traitKey(item.name);
+  if (!recordUserVote(storageKeys.traitRatingVoteUsers, key, type)) {
+    setRankingNotice("評価は一人一回までです。");
+    return;
+  }
+
+  const votes = loadJson(storageKeys.traitRatingVotes, {});
+  votes[key] ||= { likes: 0, dislikes: 0 };
+  votes[key][type] += 1;
+  saveJson(storageKeys.traitRatingVotes, votes);
+
+  if (type === "dislikes" && shouldRemoveTrait(item)) {
+    deleteReportedTrait(item, key);
+    els.detailDialog.close();
+    setRankingNotice(`「${item.displayName || item.name}」は低評価割合が高いためランキングから外しました。`);
+    render();
+    return;
+  }
+
+  if (type === "dislikes" && votes[key].dislikes >= DISLIKE_DELETE_THRESHOLD) {
+    setRankingNotice("高評価やお気に入り数も見て、まだ削除しない判定です。");
+  }
+
+  renderDetailVotes(item);
 }
 
 function showAllRanking() {
@@ -1004,14 +1127,80 @@ function reportTrait(item) {
   reports[key].count += 1;
   saveJson(storageKeys.traitReports, reports);
 
-  if (reports[key].count < TRAIT_REPORT_DELETE_THRESHOLD) {
-    setRankingNotice(`「${item.displayName || item.name}」を通報しました。あと${TRAIT_REPORT_DELETE_THRESHOLD - reports[key].count}件でランキングから外れます。`);
+  if (!shouldRemoveTrait(item)) {
+    setRankingNotice("通報しました。高評価やお気に入り数も見て、まだ削除しない判定です。");
     return;
   }
 
   deleteReportedTrait(item, key);
-  setRankingNotice(`「${item.displayName || item.name}」は複数通報されたのでランキングから外しました。`);
+  if (state.currentDetailItem && traitKey(state.currentDetailItem.name) === key) {
+    els.detailDialog.close();
+  }
+  setRankingNotice(`「${item.displayName || item.name}」は通報と低評価割合が高いためランキングから外しました。`);
   render();
+}
+
+function reportTraitImage(item) {
+  const key = traitKey(item.name);
+  if (!getTraitImage(item)) {
+    setRankingNotice("通報できる画像がありません。");
+    return;
+  }
+
+  const reports = loadJson(storageKeys.traitImageReports, {});
+  reports[key] ||= { count: 0, name: item.displayName || item.name };
+  reports[key].count += 1;
+  saveJson(storageKeys.traitImageReports, reports);
+
+  if (!shouldRemoveTraitImage(item)) {
+    setRankingNotice("画像を通報しました。高評価やお気に入り数も見て、まだ削除しない判定です。");
+    return;
+  }
+
+  deleteTraitImage(item, key);
+  if (state.currentDetailItem && traitKey(state.currentDetailItem.name) === key) {
+    els.detailMedia.classList.remove("has-image");
+    els.detailImage.removeAttribute("src");
+    els.detailImageReportButton.disabled = true;
+  }
+  setRankingNotice(`「${item.displayName || item.name}」の画像は通報と低評価割合が高いため削除しました。`);
+  render();
+}
+
+function shouldRemoveTrait(item) {
+  const key = traitKey(item.name);
+  const votes = getTraitRatingVotes(item);
+  const reports = Number(loadJson(storageKeys.traitReports, {})[key]?.count || 0);
+  return shouldRemoveByModeration(votes.dislikes + reports, votes.likes + getFavoriteCount(item));
+}
+
+function shouldRemoveTraitImage(item) {
+  const key = traitKey(item.name);
+  const votes = getTraitImageVotes(item);
+  const reports = Number(loadJson(storageKeys.traitImageReports, {})[key]?.count || 0);
+  return shouldRemoveByModeration(votes.dislikes + reports, votes.likes + getFavoriteCount(item));
+}
+
+function shouldRemoveByModeration(negative, positive) {
+  if (negative < DISLIKE_DELETE_THRESHOLD) return false;
+  const total = negative + positive;
+  return total > 0 && negative / total >= 0.7 && negative >= positive + 3;
+}
+
+function deleteTraitImage(item, key = traitKey(item.name)) {
+  const images = loadJson(storageKeys.traitImages, {});
+  delete images[key];
+  saveJson(storageKeys.traitImages, images);
+
+  const votes = loadJson(storageKeys.traitVotes, {});
+  delete votes[key];
+  saveJson(storageKeys.traitVotes, votes);
+
+  const reports = loadJson(storageKeys.traitImageReports, {});
+  delete reports[key];
+  saveJson(storageKeys.traitImageReports, reports);
+
+  deleteVoteUsers(storageKeys.traitVoteUsers, key);
 }
 
 function deleteReportedTrait(item, key) {
@@ -1097,8 +1286,13 @@ function voteCurrentItem(type) {
   votes[key][type] += 1;
   saveJson(storageKeys.votes, votes);
 
-  if (type === "dislikes" && votes[key].dislikes >= DISLIKE_DELETE_THRESHOLD) {
+  if (type === "dislikes" && shouldRemoveByModeration(votes[key].dislikes, votes[key].likes)) {
     deleteDislikedItem(key);
+  } else if (type === "dislikes" && votes[key].dislikes >= DISLIKE_DELETE_THRESHOLD) {
+    els.deleteNotice.textContent = "高評価数も見て、まだ削除しない判定です。";
+    window.setTimeout(() => {
+      els.deleteNotice.textContent = "";
+    }, 4500);
   }
 
   renderLuckyItem();
@@ -1157,6 +1351,11 @@ function buildTraitComment(item, lucky) {
     .replaceAll("{rank}", item.rank)}`;
 }
 
+function buildDefaultTraitDescription(name) {
+  const displayName = cleanText(name) || "この性癖";
+  return `説明が追加されると、ここに詳しい内容が表示されます。`;
+}
+
 function sanitizeTraitName(value) {
   let text = cleanText(value);
 
@@ -1175,7 +1374,7 @@ function containsBlockedWord(text) {
   return BLOCKED_WORD_PATTERNS.some((pattern) => pattern.test(cleanText(text)));
 }
 
-async function collectRequestedItems() {
+async function collectRequestedItems(requireMinimum = true) {
   const items = [];
 
   for (let index = 0; index < els.itemInputs.length; index += 1) {
@@ -1191,7 +1390,7 @@ async function collectRequestedItems() {
     items.push(createItemRecord(name, desc, file ? await readFile(file) : ""));
   }
 
-  if (items.length < 2) {
+  if (requireMinimum && items.length < 2) {
     return { error: "関連ラッキーアイテムは2個以上必要です。", items: [] };
   }
 

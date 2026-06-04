@@ -25,11 +25,6 @@
         </div>
       </section>
 
-      <aside class="ad-banner" aria-label="広告">
-        <span>Advertisement</span>
-        <strong>広告枠</strong>
-      </aside>
-
       <section class="rankings">
         <div id="topSpotlight" class="rank-spotlight"></div>
 
@@ -102,15 +97,19 @@
               <label for="traitInput">性癖名</label>
               <input id="traitInput" name="trait" type="text" maxlength="24" placeholder="例: 朝型ロマン派" autocomplete="off" required />
             </div>
+            <div class="form-field trait-field">
+              <label for="traitDescriptionInput">性癖の説明</label>
+              <textarea id="traitDescriptionInput" name="traitDescription" maxlength="180" placeholder="例: 朝の空気感に強く反応するこだわり" required></textarea>
+            </div>
           </div>
           <div class="item-request-grid">
             <div class="form-field">
               <label for="itemInput1">関連アイテム名 1</label>
-              <input id="itemInput1" name="item1" type="text" maxlength="24" placeholder="例: 目覚ましベル" autocomplete="off" required />
+              <input id="itemInput1" name="item1" type="text" maxlength="24" placeholder="例: 目覚ましベル" autocomplete="off" />
             </div>
             <div class="form-field">
               <label for="itemDesc1">説明 1</label>
-              <input id="itemDesc1" name="itemDesc1" type="text" maxlength="80" placeholder="例: 朝の一歩を少しだけ強くするベル" autocomplete="off" required />
+              <input id="itemDesc1" name="itemDesc1" type="text" maxlength="80" placeholder="例: 朝の一歩を少しだけ強くするベル" autocomplete="off" />
             </div>
             <div class="form-field image-field">
               <label for="itemImage1">写真 1</label>
@@ -118,11 +117,11 @@
             </div>
             <div class="form-field">
               <label for="itemInput2">関連アイテム名 2</label>
-              <input id="itemInput2" name="item2" type="text" maxlength="24" placeholder="例: コーヒーマグ" autocomplete="off" required />
+              <input id="itemInput2" name="item2" type="text" maxlength="24" placeholder="例: コーヒーマグ" autocomplete="off" />
             </div>
             <div class="form-field">
               <label for="itemDesc2">説明 2</label>
-              <input id="itemDesc2" name="itemDesc2" type="text" maxlength="80" placeholder="例: 余韻をゆっくり温めるマグ" autocomplete="off" required />
+              <input id="itemDesc2" name="itemDesc2" type="text" maxlength="80" placeholder="例: 余韻をゆっくり温めるマグ" autocomplete="off" />
             </div>
             <div class="form-field image-field">
               <label for="itemImage2">写真 2</label>
@@ -161,10 +160,26 @@
 
     <dialog id="detailDialog">
       <button class="close-button" id="closeDetail" type="button" aria-label="閉じる">×</button>
-      <p class="eyebrow" id="detailRank">Rank</p>
-      <h2 id="detailName"></h2>
-      <p id="detailText"></p>
-      <div id="detailItems" class="item-tags"></div>
+      <div class="detail-layout">
+        <div class="detail-media" id="detailMedia">
+          <img id="detailImage" alt="" />
+          <p id="detailNoImage">画像なし</p>
+        </div>
+        <div class="detail-copy">
+          <p class="eyebrow" id="detailRank">Rank</p>
+          <h2 id="detailName"></h2>
+          <p id="detailText"></p>
+          <div class="detail-votes">
+            <button id="detailLikeButton" type="button">高評価 <span id="detailLikeCount">0</span></button>
+            <button id="detailDislikeButton" type="button">低評価 <span id="detailDislikeCount">0</span></button>
+          </div>
+          <div class="detail-actions">
+            <button id="detailTraitReportButton" class="report-button" type="button">性癖を通報</button>
+            <button id="detailImageReportButton" class="report-button" type="button">画像を通報</button>
+          </div>
+          <div id="detailItems" class="item-tags"></div>
+        </div>
+      </div>
     </dialog>
 
     <dialog id="allDialog">
