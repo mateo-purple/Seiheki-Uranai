@@ -281,6 +281,10 @@ main {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
+.favorite-ranks .compact-rank-list {
+  grid-template-columns: 1fr;
+}
+
 .rank-item {
   width: 100%;
   min-height: 58px;
