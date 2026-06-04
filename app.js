@@ -8,7 +8,7 @@ const IP_LOOKUP_URL = "https://api.ipify.org?format=json";
 const DEFAULT_LUCKY_ITEMS = [
   {
     name: "スカート",
-    desc: "軽やかに揺れる距離感が今日の追い風です。",
+    desc: "軽やかに揺れる距離感はあなたが忘れていたもの。",
     image: ""
   }
 ];
@@ -386,7 +386,7 @@ async function getRequestIdentity() {
 }
 
 function render() {
-  state.ranked = rankTraits(getAllTraits(), state.dateSeed);
+  state.ranked = rankTraits(getDailyTraits(), state.dateSeed);
   renderSpotlights();
   renderFavoriteRanks();
   renderList(els.topList, state.ranked.slice(1, 15), { featuredCount: 2 });
@@ -423,6 +423,10 @@ function getCustomTraits() {
 function getAllTraits() {
   const hidden = new Set(loadJson(storageKeys.hiddenTraits, []));
   return mergeTraits([...getBaseTraits(), ...getCustomTraits()]).filter((trait) => !hidden.has(traitKey(trait.name)));
+}
+
+function getDailyTraits() {
+  return mergeTraits(getBaseTraits());
 }
 
 function normalizeTraitRecord(record) {
@@ -1038,7 +1042,7 @@ function rankTraits(traits, seed) {
 function buildLuckyItems() {
   const map = new Map(DEFAULT_LUCKY_ITEMS.map((item) => [itemKey(item.name), { ...item, source: "default" }]));
 
-  for (const trait of getCustomTraits()) {
+  for (const trait of getDailyTraits()) {
     for (const item of normalizeItemRecords(trait.items)) {
       const key = itemKey(item.name);
       if (!map.has(key)) {
