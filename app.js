@@ -1002,7 +1002,7 @@ function showDetail(item) {
   els.detailImageReportButton.disabled = !imageSrc;
   els.detailItems.innerHTML = "";
 
-  for (const related of normalizeItemRecords(item.items)) {
+  for (const related of getVisibleRelatedItems(item)) {
     const tag = document.createElement("span");
     tag.textContent = related.name;
     els.detailItems.append(tag);
@@ -1332,8 +1332,14 @@ function renderVotes() {
 }
 
 function pickRelatedItem(item) {
-  const items = normalizeItemRecords(item.items);
-  return items[hash(`${state.dateSeed}:related:${item.name}`) % items.length];
+  const items = getVisibleRelatedItems(item);
+  const pool = items.length ? items : DEFAULT_LUCKY_ITEMS;
+  return pool[hash(`${state.dateSeed}:related:${item.name}`) % pool.length];
+}
+
+function getVisibleRelatedItems(item) {
+  const defaultItemKeys = new Set(DEFAULT_LUCKY_ITEMS.map((lucky) => itemKey(lucky.name)));
+  return normalizeItemRecords(item.items).filter((related) => !defaultItemKeys.has(itemKey(related.name)));
 }
 
 function buildTraitComment(item, lucky) {
