@@ -382,8 +382,8 @@ function bindEvents() {
     addTraitFromForm();
   });
 
-  els.likeButton.addEventListener("click", () => voteCurrentItem("likes"));
-  els.dislikeButton.addEventListener("click", () => voteCurrentItem("dislikes"));
+  els.likeButton.addEventListener("click", async () => voteCurrentItem("likes"));
+  els.dislikeButton.addEventListener("click", async () => voteCurrentItem("dislikes"));
 
   els.imageUpload.addEventListener("change", async () => {
     const file = els.imageUpload.files?.[0];
@@ -400,13 +400,13 @@ function bindEvents() {
   });
 
   els.closeDetail.addEventListener("click", () => els.detailDialog.close());
-  els.detailLikeButton.addEventListener("click", () => voteCurrentTrait("likes"));
-  els.detailDislikeButton.addEventListener("click", () => voteCurrentTrait("dislikes"));
-  els.detailTraitReportButton.addEventListener("click", () => {
-    if (state.currentDetailItem) reportTrait(state.currentDetailItem);
+  els.detailLikeButton.addEventListener("click", async () => voteCurrentTrait("likes"));
+  els.detailDislikeButton.addEventListener("click", async () => voteCurrentTrait("dislikes"));
+  els.detailTraitReportButton.addEventListener("click", async () => {
+    if (state.currentDetailItem) await reportTrait(state.currentDetailItem);
   });
-  els.detailImageReportButton.addEventListener("click", () => {
-    if (state.currentDetailItem) reportTraitImage(state.currentDetailItem);
+  els.detailImageReportButton.addEventListener("click", async () => {
+    if (state.currentDetailItem) await reportTraitImage(state.currentDetailItem);
   });
   els.closeAll.addEventListener("click", () => els.allDialog.close());
   els.allRankingButton.addEventListener("click", showAllRanking);
@@ -790,7 +790,7 @@ async function addTraitFromForm() {
   const existingCustom = custom.find((trait) => traitKey(trait.name) === traitKey(safeName));
   const key = traitKey(safeName);
   const isExistingTrait = getAllTraits().some((trait) => traitKey(trait.name) === key);
-  const requestedItems = await collectRequestedItems(!isExistingTrait);
+  const requestedItems = await collectRequestedItems();
 
   if (requestedItems.error) {
     setNotice(requestedItems.error);
@@ -1015,17 +1015,20 @@ function renderSpotlight(container, item, title, eyebrow) {
   const meta = document.createElement("p");
   meta.className = "notice";
   const deviationText = getVisibleDeviationText(item);
-  meta.textContent = deviationText ? `${title} / ${deviationText}` : title;
 
   const votes = getTraitImageVotes(item);
-  const voted = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name));
+  const imageDeviationText = `画像評価偏差値 ${calculateVoteDeviation(votes)}`;
+  meta.textContent = [title, deviationText, imageDeviationText].filter(Boolean).join(" / ");
+
+  const liked = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name), "likes");
+  const disliked = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name), "dislikes");
   const voteRow = document.createElement("div");
   voteRow.className = "spotlight-votes";
 
   const like = document.createElement("button");
   like.type = "button";
   like.textContent = `高評価 ${votes.likes}`;
-  like.disabled = voted;
+  like.disabled = liked;
   like.addEventListener("click", async (event) => {
     event.stopPropagation();
     await voteTraitImage(item, "likes");
@@ -1034,7 +1037,7 @@ function renderSpotlight(container, item, title, eyebrow) {
   const dislike = document.createElement("button");
   dislike.type = "button";
   dislike.textContent = `低評価 ${votes.dislikes}`;
-  dislike.disabled = voted;
+  dislike.disabled = disliked;
   dislike.addEventListener("click", async (event) => {
     event.stopPropagation();
     await voteTraitImage(item, "dislikes");
@@ -1205,19 +1208,20 @@ function createTraitImagePanel(item) {
   upload.append(input);
 
   const votes = getTraitImageVotes(item);
-  const voted = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name));
+  const liked = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name), "likes");
+  const disliked = hasUserVoted(storageKeys.traitVoteUsers, traitKey(item.name), "dislikes");
   const like = document.createElement("button");
   like.className = "mini-vote";
   like.type = "button";
   like.textContent = `高評価 ${votes.likes}`;
-  like.disabled = voted;
+  like.disabled = liked;
   like.addEventListener("click", async () => voteTraitImage(item, "likes"));
 
   const dislike = document.createElement("button");
   dislike.className = "mini-vote";
   dislike.type = "button";
   dislike.textContent = `低評価 ${votes.dislikes}`;
-  dislike.disabled = voted;
+  dislike.disabled = disliked;
   dislike.addEventListener("click", async () => voteTraitImage(item, "dislikes"));
 
   controls.append(upload, like, dislike);
@@ -1231,7 +1235,7 @@ function getTraitImage(item) {
 
 function getTraitImageVotes(item) {
   const votes = loadJson(storageKeys.traitVotes, {});
-  return votes[traitKey(item.name)] || { likes: 0, dislikes: 0 };
+  return normalizeVoteCounts(votes[traitKey(item.name)]);
 }
 
 async function voteTraitImage(item, type) {
@@ -1239,12 +1243,12 @@ async function voteTraitImage(item, type) {
 
   const key = traitKey(item.name);
   if (!recordUserVote(storageKeys.traitVoteUsers, key, type)) {
-    setRankingNotice("評価は一人一回までです。");
+    setRankingNotice(`${getVoteTypeLabel(type)}は同じIPアドレスから一回までです。`);
     return;
   }
 
   const votes = loadJson(storageKeys.traitVotes, {});
-  votes[key] ||= { likes: 0, dislikes: 0 };
+  votes[key] = normalizeVoteCounts(votes[key]);
   votes[key][type] += 1;
   saveJson(storageKeys.traitVotes, votes);
 
@@ -1266,10 +1270,11 @@ async function voteTraitImage(item, type) {
 function showDetail(item) {
   state.currentDetailItem = item;
   const imageSrc = getTraitImage(item);
+  const ratingDeviation = calculateVoteDeviation(getTraitRatingVotes(item));
 
   els.detailRank.textContent = item.registered
-    ? `Rank ${item.rank} / 偏差値 ${item.deviation} / 登録 ${item.registrationCount || 0}`
-    : `Rank ${item.rank}`;
+    ? `Rank ${item.rank} / 偏差値 ${item.deviation} / 登録 ${item.registrationCount || 0} / 評価偏差値 ${ratingDeviation}`
+    : `Rank ${item.rank} / 評価偏差値 ${ratingDeviation}`;
   els.detailName.textContent = item.displayName || item.name;
   els.detailText.textContent = getTraitDescription(item);
   els.detailMedia.classList.toggle("has-image", Boolean(imageSrc));
@@ -1302,17 +1307,18 @@ function getTraitDescription(item) {
 function renderDetailVotes(item) {
   const key = traitKey(item.name);
   const votes = getTraitRatingVotes(item);
-  const voted = hasUserVoted(storageKeys.traitRatingVoteUsers, key);
+  const liked = hasUserVoted(storageKeys.traitRatingVoteUsers, key, "likes");
+  const disliked = hasUserVoted(storageKeys.traitRatingVoteUsers, key, "dislikes");
 
   els.detailLikeCount.textContent = votes.likes;
   els.detailDislikeCount.textContent = votes.dislikes;
-  els.detailLikeButton.disabled = voted;
-  els.detailDislikeButton.disabled = voted;
+  els.detailLikeButton.disabled = liked;
+  els.detailDislikeButton.disabled = disliked;
 }
 
 function getTraitRatingVotes(item) {
   const votes = loadJson(storageKeys.traitRatingVotes, {});
-  return votes[traitKey(item.name)] || { likes: 0, dislikes: 0 };
+  return normalizeVoteCounts(votes[traitKey(item.name)]);
 }
 
 async function voteCurrentTrait(type) {
@@ -1323,12 +1329,12 @@ async function voteCurrentTrait(type) {
 
   const key = traitKey(item.name);
   if (!recordUserVote(storageKeys.traitRatingVoteUsers, key, type)) {
-    setRankingNotice("評価は一人一回までです。");
+    setRankingNotice(`${getVoteTypeLabel(type)}は同じIPアドレスから一回までです。`);
     return;
   }
 
   const votes = loadJson(storageKeys.traitRatingVotes, {});
-  votes[key] ||= { likes: 0, dislikes: 0 };
+  votes[key] = normalizeVoteCounts(votes[key]);
   votes[key][type] += 1;
   saveJson(storageKeys.traitRatingVotes, votes);
 
@@ -1566,14 +1572,14 @@ async function voteCurrentItem(type) {
   const votes = loadJson(storageKeys.votes, {});
   const key = itemKey(state.currentLuckyItem.name);
   if (!recordUserVote(storageKeys.itemVoteUsers, key, type)) {
-    els.deleteNotice.textContent = "評価は一人一回までです。";
+    els.deleteNotice.textContent = `${getVoteTypeLabel(type)}は同じIPアドレスから一回までです。`;
     window.setTimeout(() => {
       els.deleteNotice.textContent = "";
     }, 4500);
     return;
   }
 
-  votes[key] ||= { likes: 0, dislikes: 0 };
+  votes[key] = normalizeVoteCounts(votes[key]);
   votes[key][type] += 1;
   saveJson(storageKeys.votes, votes);
 
@@ -1613,13 +1619,29 @@ function renderVotes() {
   if (!state.currentLuckyItem) return;
 
   const votes = loadJson(storageKeys.votes, {});
-  const current = votes[itemKey(state.currentLuckyItem.name)] || { likes: 0, dislikes: 0 };
-  const voted = hasUserVoted(storageKeys.itemVoteUsers, itemKey(state.currentLuckyItem.name));
+  const current = normalizeVoteCounts(votes[itemKey(state.currentLuckyItem.name)]);
+  const key = itemKey(state.currentLuckyItem.name);
+  const liked = hasUserVoted(storageKeys.itemVoteUsers, key, "likes");
+  const disliked = hasUserVoted(storageKeys.itemVoteUsers, key, "dislikes");
 
   els.likeCount.textContent = current.likes;
   els.dislikeCount.textContent = current.dislikes;
-  els.likeButton.disabled = voted;
-  els.dislikeButton.disabled = voted;
+  els.likeButton.disabled = liked;
+  els.dislikeButton.disabled = disliked;
+  renderLuckyVoteDeviation(current);
+}
+
+function renderLuckyVoteDeviation(votes) {
+  let element = document.querySelector("#luckyVoteDeviation");
+
+  if (!element) {
+    element = document.createElement("p");
+    element.id = "luckyVoteDeviation";
+    element.className = "notice";
+    els.deleteNotice.before(element);
+  }
+
+  element.textContent = `評価偏差値 ${calculateVoteDeviation(votes)}`;
 }
 
 function pickRelatedItem(item) {
@@ -1671,7 +1693,7 @@ function containsBlockedWord(text) {
   return BLOCKED_WORD_PATTERNS.some((pattern) => pattern.test(cleanText(text)));
 }
 
-async function collectRequestedItems(requireMinimum = true) {
+async function collectRequestedItems() {
   const items = [];
 
   for (let index = 0; index < els.itemInputs.length; index += 1) {
@@ -1685,10 +1707,6 @@ async function collectRequestedItems(requireMinimum = true) {
     if (!name && desc) return { error: `説明${index + 1}に対応する関連アイテム名を入れてください。`, items: [] };
 
     items.push(createItemRecord(name, desc, file ? await readFile(file) : ""));
-  }
-
-  if (requireMinimum && items.length < 2) {
-    return { error: "関連ラッキーアイテムは2個以上必要です。", items: [] };
   }
 
   if (items.length > 4) {
@@ -1727,23 +1745,57 @@ function calculateDeviationFromRegistrations(count) {
   return Math.max(25, Math.min(74, Math.round(43 + Math.log2(safeCount) * 7)));
 }
 
+function calculateVoteDeviation(votes) {
+  const likes = Math.max(0, Number(votes?.likes || 0));
+  const dislikes = Math.max(0, Number(votes?.dislikes || 0));
+  const total = likes + dislikes;
+  const balance = likes - dislikes;
+  const confidence = Math.log2(total + 1) * 2;
+  return Math.max(25, Math.min(74, Math.round(50 + balance * 4 + confidence)));
+}
+
+function normalizeVoteCounts(votes) {
+  return {
+    likes: Math.max(0, Number(votes?.likes || 0)),
+    dislikes: Math.max(0, Number(votes?.dislikes || 0))
+  };
+}
+
+function getVoteTypeLabel(type) {
+  return type === "likes" ? "高評価" : "低評価";
+}
+
 function getVoteIdentity() {
   return state.requestIdentity || localStorage.getItem(storageKeys.visitorId) || "unknown";
 }
 
-function hasUserVoted(storageKey, targetKey) {
+function hasUserVoted(storageKey, targetKey, type) {
   const votes = loadJson(storageKey, {});
-  return Boolean(votes[targetKey]?.[getVoteIdentity()]);
+  const record = votes[targetKey]?.[getVoteIdentity()];
+  if (!type) return Boolean(record);
+  if (typeof record === "string") return record === type;
+  return Boolean(record?.[type]);
 }
 
 function recordUserVote(storageKey, targetKey, type) {
   const identity = getVoteIdentity();
   const votes = loadJson(storageKey, {});
   votes[targetKey] ||= {};
+  const current = votes[targetKey][identity];
 
-  if (votes[targetKey][identity]) return false;
+  if (typeof current === "string") {
+    if (current === type) return false;
+    votes[targetKey][identity] = { [current]: true, [type]: true };
+    saveJson(storageKey, votes);
+    return true;
+  }
 
-  votes[targetKey][identity] = type;
+  if (current?.[type]) return false;
+
+  votes[targetKey][identity] = {
+    ...(current && typeof current === "object" ? current : {}),
+    [type]: true
+  };
   saveJson(storageKey, votes);
   return true;
 }
